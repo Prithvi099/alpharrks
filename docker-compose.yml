@@ -1,0 +1,185 @@
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: alpha0
+      POSTGRES_PASSWORD: alpha0pass
+      POSTGRES_DB: alpha0
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U alpha0 -d alpha0 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - alpha0-network
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli ping || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - alpha0-network
+    restart: unless-stopped
+
+
+  auth-service:
+    build: ./services/auth-service
+    ports:
+      - "8001:8001"
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://alpha0:alpha0pass@postgres/alpha0
+      REDIS_HOST: redis
+      SECRET_KEY: ${SECRET_KEY}
+    depends_on:
+      - postgres
+      - redis
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8001/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - alpha0-network
+    restart: unless-stopped
+
+  workflow-service:
+    build: ./services/workflow-service
+    ports:
+      - "8002:8002"
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://alpha0:alpha0pass@postgres/alpha0
+      REDIS_HOST: redis
+      SECRET_KEY: ${SECRET_KEY}
+    depends_on:
+      - postgres
+      - redis
+      - auth-service
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8002/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - alpha0-network
+    restart: unless-stopped
+
+  ai-service:
+    build: ./services/ai-service
+    ports:
+      - "8003:8003"
+    env_file: .env
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      SECRET_KEY: ${SECRET_KEY}
+    depends_on:
+      - auth-service
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8003/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - alpha0-network
+    restart: unless-stopped
+
+  notification-service:
+    build: ./services/notification-service
+    ports:
+      - "8004:8004"
+    env_file: .env
+    environment:
+      SMTP_HOST: ${SMTP_HOST}
+      SMTP_USERNAME: ${SMTP_USERNAME}
+      SMTP_PASSWORD: ${SMTP_PASSWORD}
+      SECRET_KEY: ${SECRET_KEY}
+    depends_on:
+      - auth-service
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8004/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - alpha0-network
+    restart: unless-stopped
+
+  storage-service:
+    build: ./services/storage-service
+    ports:
+      - "8005:8005"
+    env_file: .env
+    environment:
+      AWS_ACCESS_KEY: ${AWS_ACCESS_KEY}
+      AWS_SECRET_KEY: ${AWS_SECRET_KEY}
+      S3_BUCKET: ${S3_BUCKET}
+      SECRET_KEY: ${SECRET_KEY}
+    depends_on:
+      - auth-service
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8005/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - alpha0-network
+    restart: unless-stopped
+
+  gateway:
+    build: ./gateway
+    ports:
+      - "8000:8000"
+    env_file: .env
+    environment:
+      AUTH_SERVICE_URL: http://auth-service:8001
+      WORKFLOW_SERVICE_URL: http://workflow-service:8002
+      AI_SERVICE_URL: http://ai-service:8003
+      NOTIFICATION_SERVICE_URL: http://notification-service:8004
+      STORAGE_SERVICE_URL: http://storage-service:8005
+    depends_on:
+      - auth-service
+      - workflow-service
+      - ai-service
+      - notification-service
+      - storage-service
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - alpha0-network
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - gateway
+    networks:
+      - alpha0-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  postgres_data:
+
+networks:
+  alpha0-network:
+    driver: bridge
